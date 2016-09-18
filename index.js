@@ -47,11 +47,16 @@ featureParser.onopentag = function (node) {
     }
 };
 
+featureParser.onclosetag = function (name) {
+    // console.log(name);
+    if (name === 'OSM') {
+        var position = changesets.indexOf(currentChangeset.toString());
+        revertedChangesets.push(changesets[position - 1]);
+    }
+};
 featureParser.onend = function () {
-    var position = changesets.indexOf(currentChangeset.toString());
     // console.log(position);
     // console.log('Reverted changeset: ' + changesets[position - 1]);
-    revertedChangesets.push(changesets[position - 1]);
 };
 
 function getHistory(changeset) {
@@ -85,18 +90,17 @@ var changesets = [];
 var revertedChangesets = [];
 function getRevertChangeset(ids) {
     ids.nodes.forEach(function (nodeid) {
-        console.log('## ' + nodeid);
-        changeset = [];
         var nodeUrl = "http://www.openstreetmap.org/api/0.6/node/" + nodeid + "/history";
         q.defer(listChangesets, nodeUrl);
     });
-    q.awaitAll(function (error) {
+    q.awaitAll(function (error, reverts) {
         if (error) throw error;
-        console.log(JSON.stringify(_.uniq(revertedChangesets)));
+        console.log(_.uniq(revertedChangesets));
     });
 }
 
 function listChangesets(nodeUrl, callback) {
+    changesets = [];
     request(nodeUrl, function(error, response, body) {
         if (!error && response.statusCode == 200) {
             featureParser.write(body).close();
