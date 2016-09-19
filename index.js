@@ -2,133 +2,136 @@ var sax = require('sax');
 var request = require('request');
 var d3 = require('d3-queue');
 var _ = require('lodash');
-// var csv = require('csvtojson');
 var fs = require('fs');
-var changesetParser = sax.parser();
-var featureParser = sax.parser();
-var q = d3.queue(1);
-
+var parser = require('xml2json');
 var Converter = require("csvtojson").Converter;
 var converter = new Converter({});
-var currentChangeset;
-converter.fromFile("./changesets.csv",function(err,result){
-    // console.log(result);
-    result.splice(0,1).forEach(function (d) {
-        console.log(d.changesetID);
-        currentChangeset = d.changesetID;
-        getHistory(d.changesetID);
-        // fs.appendFileSync('reverted-changesets.csv', reverts.join(','), {'encoding': 'utf8'});
+
+processChangesets('./changesets.csv');
+
+function processChangesets(filename) {
+    var topQ = d3.queue(1);
+    var existingChangesets;
+    if (fs.existsSync('reverted-changesets.csv')) {
+        // console.log('reverted changesets exists');
+        existingChangesets = fs.readFileSync('reverted-changesets.csv', {'encoding': 'utf-8'})
+            .split('\n')
+            .map(function(line) {
+                if (_.trim(line)) {
+                    var d = JSON.parse(line);
+                    return Number(_.keys(d)[0]);
+                }
+            })
+            .filter(function(obj) {
+                return obj;
+            });
+    } else {
+        existingChangesets = [];
+    }
+    converter.fromFile(filename, function(err, result) {
+        result.slice(1, 4).forEach(function(d) {
+            if (existingChangesets.indexOf(d.changesetID) === -1) {
+                topQ.defer(findReverted, d.changesetID);
+            }
+        });
+        topQ.awaitAll(function() {
+            console.log('done');
+        });
     });
-});
+}
 
-changesetParser.onopentag = function (node) {
-    var name = node.name.toLowerCase();
-    var attrs = {};
-    for (var k in node.attributes) {
-      attrs[k.toLowerCase()] = node.attributes[k];
-    }
-
-    if (name === 'node') {
-        ids.nodes.push(attrs.id);
-    }
-
-    if (name === 'way') {
-        ids.ways.push(attrs.id);
-    }
-
-    if (name === 'relation') {
-        ids.relations.push(attrs.id);
-    }
-
-};
-
-changesetParser.onend = function () {
-    // console.log(JSON.stringify(ids));
-    getRevertChangeset(ids);
-};
-// for a changeset, get the history
-// 42023530
-// `http://www.openstreetmap.org/api/0.6/changeset/42023530/download
-
-featureParser.onopentag = function (node) {
-    var name = node.name.toLowerCase();
-    var attrs = {};
-    for (var k in node.attributes) {
-      attrs[k.toLowerCase()] = node.attributes[k];
-    }
-
-    if (name === 'node' || name === 'way' || name === 'relation') {
-        changesets.push(attrs.changeset);
-    }
-};
-
-featureParser.onclosetag = function (name) {
-    // console.log(name);
-    if (name === 'OSM') {
-        var position = changesets.indexOf(currentChangeset.toString());
-        revertedChangesets.push(changesets[position - 1]);
-    }
-};
-featureParser.onend = function () {
-    // console.log(position);
-    // console.log('Reverted changeset: ' + changesets[position - 1]);
-};
-
-function getHistory(changeset) {
-    console.log(changeset);
+function findReverted(changeset, callback) {
     var url = "http://www.openstreetmap.org/api/0.6/changeset/" + changeset + "/download";
     request(url, function (error, response, body) {
       if (!error && response.statusCode == 200) {
-        // console.log(body);
-        getFeatureList(body);
+        var data = parser.toJson(body, {
+            'object': true,
+            'arrayNotation': true
+        });
+        var changesetData = getChangesetData(data);
+        console.log('changeset data', changesetData);
+        getRevertedChangesets(changeset, changesetData, callback);
+        // callback();
+      } else {
+        console.log('get history error', error);
+        console.log('get history response', response);
+        callback('error');
       }
     });
 }
 
-// get a list of all node ids and way id from the history.
-
-var ids = {
-    "nodes": [],
-    "ways": [],
-    "relations": []
-};
-
-
-function getFeatureList(history) {
-    ids.nodes = [];
-    ids.ways = [];
-    ids.relations = [];
-    changesetParser.write(history).close();
-}
-
-// for each node and way, get it's history, and get a list of changeset IDs, then get the revert changeset - 1 from that list.
-
-var changesets = [];
-var revertedChangesets = [];
-function getRevertChangeset(ids) {
-    ids.nodes.forEach(function (nodeid) {
-        var nodeUrl = "http://www.openstreetmap.org/api/0.6/node/" + nodeid + "/history";
-        q.defer(listChangesets, nodeUrl);
-    });
-    q.awaitAll(function (error) {
-        if (error) throw error;
-        var reverts = _.uniq(revertedChangesets).join(',');
-        var data = {};
-        data[currentChangeset] = reverts;
-        fs.appendFileSync('reverted-changesets.csv', JSON.stringify(data) + '\n', {'encoding': 'utf8'});
-        // return _.uniq(revertedChangesets);
-    });
-}
-
-function listChangesets(nodeUrl, callback) {
-    changesets = [];
-    request(nodeUrl, function(error, response, body) {
-        if (!error && response.statusCode == 200) {
-            featureParser.write(body).close();
+/*
+    Takes an xml2json output of a changeset and gives back all node / way / relation ids
+*/
+function getChangesetData(data) {
+    var out = {
+        'node': {},
+        'way': {},
+        'relation': {}
+    };
+    var change = data.osmChange[0];
+    ['modify', 'delete'].forEach(function(changeType) {
+        if (change.hasOwnProperty(changeType)) {
+            change[changeType].forEach(function(obj) {
+                var type = _.keys(obj)[0];
+                var changeDetails = obj[type][0];
+                var id = changeDetails.id;
+                var version = Number(changeDetails.version);
+                if (changeType === 'delete') {
+                    version = version + 1;
+                }
+                out[type][id] = version;
+            });
         }
-        callback(null);
+    });
+    return out;
+}
+
+function getRevertedChangesets(id, data, callback) {
+    var q = d3.queue(1);
+    ['node', 'way', 'relation'].forEach(function(type) {
+        _.keys(data[type]).slice(0,50).forEach(function(id) {
+            var version = data[type][id];
+            q.defer(getRevertedChangeset, type, id, version);
+        });
+    });
+    q.awaitAll(function(err, results) {
+        var d = {};
+        var cleanResults = _.filter(results, function(result) {
+            return result;
+        });
+        d[id] = _.uniq(cleanResults);
+        fs.appendFileSync('reverted-changesets.csv', JSON.stringify(d) + '\n', {'encoding': 'utf8'});
+        callback();
     });
 }
 
-// var currentChangeset = 42023530;
-// getHistory(42023530);
+function getRevertedChangeset(type, id, version, callback) {
+    var url = 'http://www.openstreetmap.org/api/0.6/' + type + '/' + id + '/history';
+    request(url, function(error, response, body) {
+        if (!error && response.statusCode == 200) {
+            var featureJson = parser.toJson(body, {
+                'object': true,
+                'arrayNotation': true
+            });
+            var revertedChangesetId = getRevertedChangesetId(featureJson, type, version);
+            callback(null, revertedChangesetId);
+        } else {
+            console.log('error fetching feature', error);
+            callback(null, null);
+        }
+    });
+}
+
+function getRevertedChangesetId(featureJson, type, version) {
+    var osm = featureJson.osm[0];
+    var history = osm[type];
+    var revertedChangeset;
+    history.forEach(function(obj) {
+        // console.log('history', obj.version, version);
+        if (Number(obj.version) === Number(version) - 1) {
+            revertedChangeset = obj.changeset;
+        }
+    });
+    return revertedChangeset;
+}
