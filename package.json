@@ -17,6 +17,8 @@
   },
   "homepage": "https://github.com/geohacker/osm-reverted-changesets#readme",
   "dependencies": {
+    "csv-parse": "^1.1.7",
+    "csvtojson": "^1.0.2",
     "d3-queue": "^3.0.3",
     "lodash": "^4.15.0",
     "request": "^2.74.0",

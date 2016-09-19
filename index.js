@@ -2,9 +2,24 @@ var sax = require('sax');
 var request = require('request');
 var d3 = require('d3-queue');
 var _ = require('lodash');
+// var csv = require('csvtojson');
+var fs = require('fs');
 var changesetParser = sax.parser();
 var featureParser = sax.parser();
 var q = d3.queue(1);
+
+var Converter = require("csvtojson").Converter;
+var converter = new Converter({});
+var currentChangeset;
+converter.fromFile("./changesets.csv",function(err,result){
+    // console.log(result);
+    result.splice(0,1).forEach(function (d) {
+        console.log(d.changesetID);
+        currentChangeset = d.changesetID;
+        getHistory(d.changesetID);
+        // fs.appendFileSync('reverted-changesets.csv', reverts.join(','), {'encoding': 'utf8'});
+    });
+});
 
 changesetParser.onopentag = function (node) {
     var name = node.name.toLowerCase();
@@ -60,9 +75,11 @@ featureParser.onend = function () {
 };
 
 function getHistory(changeset) {
+    console.log(changeset);
     var url = "http://www.openstreetmap.org/api/0.6/changeset/" + changeset + "/download";
     request(url, function (error, response, body) {
       if (!error && response.statusCode == 200) {
+        // console.log(body);
         getFeatureList(body);
       }
     });
@@ -93,9 +110,13 @@ function getRevertChangeset(ids) {
         var nodeUrl = "http://www.openstreetmap.org/api/0.6/node/" + nodeid + "/history";
         q.defer(listChangesets, nodeUrl);
     });
-    q.awaitAll(function (error, reverts) {
+    q.awaitAll(function (error) {
         if (error) throw error;
-        console.log(_.uniq(revertedChangesets));
+        var reverts = _.uniq(revertedChangesets).join(',');
+        var data = {};
+        data[currentChangeset] = reverts;
+        fs.appendFileSync('reverted-changesets.csv', JSON.stringify(data) + '\n', {'encoding': 'utf8'});
+        // return _.uniq(revertedChangesets);
     });
 }
 
@@ -109,5 +130,5 @@ function listChangesets(nodeUrl, callback) {
     });
 }
 
-var currentChangeset = 42023530;
-getHistory(42023530);
+// var currentChangeset = 42023530;
+// getHistory(42023530);
