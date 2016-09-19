@@ -11,9 +11,28 @@ processChangesets('./changesets.csv');
 
 function processChangesets(filename) {
     var topQ = d3.queue(1);
+    var existingChangesets;
+    if (fs.existsSync('reverted-changesets.csv')) {
+        // console.log('reverted changesets exists');
+        existingChangesets = fs.readFileSync('reverted-changesets.csv', {'encoding': 'utf-8'})
+            .split('\n')
+            .map(function(line) {
+                if (_.trim(line)) {
+                    var d = JSON.parse(line);
+                    return Number(_.keys(d)[0]);
+                }
+            })
+            .filter(function(obj) {
+                return obj;
+            });
+    } else {
+        existingChangesets = [];
+    }
     converter.fromFile(filename, function(err, result) {
         result.slice(1, 4).forEach(function(d) {
-            topQ.defer(findReverted, d.changesetID);
+            if (existingChangesets.indexOf(d.changesetID) === -1) {
+                topQ.defer(findReverted, d.changesetID);
+            }
         });
         topQ.awaitAll(function() {
             console.log('done');
